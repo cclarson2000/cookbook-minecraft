@@ -16,10 +16,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
 include_recipe "java::#{node['java']['install_flavor']}"
-include_recipe 'runit'
 include_recipe 'minecraft::user'
+
 
 jar_name = minecraft_file(node['minecraft']['url'])
 
@@ -40,7 +39,6 @@ remote_file "#{node['minecraft']['install_dir']}/#{jar_name}" do
   action :create_if_missing
 end
 
-include_recipe 'minecraft::service'
 include_recipe "minecraft::#{node['minecraft']['install_type']}"
 
 template "#{node['minecraft']['install_dir']}/server.properties" do
@@ -48,7 +46,12 @@ template "#{node['minecraft']['install_dir']}/server.properties" do
   group node['minecraft']['group']
   mode 0644
   action :create
-  notifies :restart, 'runit_service[minecraft]', :delayed if node['minecraft']['autorestart']
+  case node['minecraft']['init_style']
+  when 'runit'
+    notifies :restart, 'runit_service[minecraft]', :delayed if node['minecraft']['autorestart']
+  when 'upstart'
+    notifies :restart, 'service[minecraft]', :delayed if node['minecraft']['autorestart']
+  end
 end
 
 %w(ops banned-ips banned-players white-list).each do |f|
@@ -58,7 +61,12 @@ end
     mode 0644
     action :create
     content node['minecraft'][f].join("\n") + "\n"
-    notifies :restart, 'runit_service[minecraft]', :delayed if node['minecraft']['autorestart']
+    case node['minecraft']['init_style']
+    when 'runit'
+      notifies :restart, 'runit_service[minecraft]', :delayed if node['minecraft']['autorestart']
+    when 'upstart'
+      notifies :restart, 'service[minecraft]', :delayed if node['minecraft']['autorestart']
+    end
   end
 end
 
@@ -66,5 +74,32 @@ file "#{node['minecraft']['install_dir']}/eula.txt" do
   content "eula=#{node['minecraft']['accept_eula']}\n"
   mode 0644
   action :create
-  notifies :restart, 'runit_service[minecraft]', :delayed if node['minecraft']['autorestart']
+
+  case node['minecraft']['init_style']
+  when 'runit'
+    notifies :restart, 'runit_service[minecraft]', :delayed if node['minecraft']['autorestart']
+  when 'upstart'
+    notifies :restart, 'service[minecraft]', :delayed if node['minecraft']['autorestart']
+  end
+end
+
+case node['minecraft']['init_style']
+when 'runit'
+  include_recipe 'runit'
+  include_recipe 'minecraft::service'
+end
+
+template '/etc/init/minecraft.conf' do
+  source 'init_minecraft.erb'
+  owner 'root'
+  group 'root'
+  mode 0644
+  notifies :restart, 'service[minecraft]', :delayed if node['minecraft']['autorestart']
+only_if { node['minecraft']['init_style'] == 'upstart' }
+end
+
+service "minecraft" do
+  provider Chef::Provider::Service::Upstart
+  action [ :enable, :start ]
+  only_if { node['minecraft']['init_style'] == 'upstart' }
 end
